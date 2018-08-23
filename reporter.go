@@ -219,7 +219,7 @@ func NewRemoteReporter(sender Transport, opts ...ReporterOption) Reporter {
 func (r *remoteReporter) Report(span *Span) {
 	select {
 	case r.queue <- reporterQueueItem{itemType: reporterQueueItemSpan, span: span}:
-		atomic.AddInt64(&r.queueLength, 1)
+		r.metrics.ReporterQueueLength.Update(len(r.queue))
 	default:
 		r.metrics.ReporterDropped.Inc(1)
 	}
@@ -241,7 +241,6 @@ func (r *remoteReporter) sendCloseEvent() {
 	item := reporterQueueItem{itemType: reporterQueueItemClose, close: wg}
 
 	r.queue <- item // if the queue is full we will block until there is space
-	atomic.AddInt64(&r.queueLength, 1)
 	wg.Wait()
 }
 
@@ -266,7 +265,7 @@ func (r *remoteReporter) processQueue() {
 		case <-timer.C:
 			flush()
 		case item := <-r.queue:
-			atomic.AddInt64(&r.queueLength, -1)
+			r.metrics.ReporterQueueLength.Update(len(r.queue))
 			switch item.itemType {
 			case reporterQueueItemSpan:
 				span := item.span
@@ -275,8 +274,6 @@ func (r *remoteReporter) processQueue() {
 					r.logger.Error(fmt.Sprintf("error reporting span %q: %s", span.OperationName(), err.Error()))
 				} else if flushed > 0 {
 					r.metrics.ReporterSuccess.Inc(int64(flushed))
-					// to reduce the number of gauge stats, we only emit queue length on flush
-					r.metrics.ReporterQueueLength.Update(atomic.LoadInt64(&r.queueLength))
 				}
 			case reporterQueueItemClose:
 				timer.Stop()
